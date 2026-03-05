@@ -27,6 +27,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
+import edu.wpi.first.wpilibj2.command.StartEndCommand;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
@@ -78,6 +79,22 @@ public class RobotContainer {
     public RobotContainer() {
         // PathPlanner Named Commands (must be registered BEFORE buildAutoChooser)
         NamedCommands.registerCommand("Wait3Seconds", new WaitCommand(3.0));
+        NamedCommands.registerCommand("Wait Event", new WaitCommand(3.0));
+        NamedCommands.registerCommand(
+            "ShootTime",
+            new StartEndCommand(
+                () -> {
+                    shooterLeft.setControl(shooterOutput.withOutput(1.0));
+                    shooterRight.setControl(shooterOutput.withOutput(1.0));
+                    feederMotor.set(1.0);
+                },
+                () -> {
+                    shooterLeft.setControl(shooterOutput.withOutput(0.0));
+                    shooterRight.setControl(shooterOutput.withOutput(0.0));
+                    feederMotor.stopMotor();
+                }
+            ).withTimeout(7.0)
+        );
 
         autoChooser = AutoBuilder.buildAutoChooser("Tests");
         SmartDashboard.putData("Auto Mode", autoChooser);
