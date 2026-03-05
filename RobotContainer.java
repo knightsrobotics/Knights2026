@@ -6,18 +6,12 @@ package frc.robot;
 
 import static edu.wpi.first.units.Units.*;
 
-import com.ctre.phoenix6.controls.DutyCycleOut;
-import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
-import com.revrobotics.spark.SparkLowLevel.MotorType;
-import com.revrobotics.spark.SparkMax;
-import com.ctre.phoenix6.configs.TalonFXConfiguration;
-import com.ctre.phoenix6.signals.InvertedValue;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -26,7 +20,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import edu.wpi.first.wpilibj2.command.Command;
-import edu.wpi.first.wpilibj2.command.InstantCommand;
+import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import edu.wpi.first.wpilibj2.command.StartEndCommand;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
@@ -34,7 +28,11 @@ import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.generated.TunerConstants;
+import frc.robot.subsystems.ArmSubsystem;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.FeederSubsystem;
+import frc.robot.subsystems.IntakeSubsystem;
+import frc.robot.subsystems.ShooterSubsystem;
 
 public class RobotContainer {
     private final double MaxSpeed =
@@ -58,23 +56,10 @@ public class RobotContainer {
     /* Path follower */
     private final SendableChooser<Command> autoChooser;
 
-    // -------------------------
-    // Mechanism Motors (REV on rioCAN)
-    // -------------------------
-    private final SparkMax intakeMotor = new SparkMax(1, MotorType.kBrushless);
-
-    private final SparkMax leftArmMotor = new SparkMax(2, MotorType.kBrushless);
-    private final SparkMax rightArmMotor = new SparkMax(3, MotorType.kBrushless);
-
-    private final SparkMax feederMotor = new SparkMax(4, MotorType.kBrushless);
-
-    // Shooter (Kraken X60 = TalonFX)
-    // NOTE: This uses default CAN bus (roboRIO). If you want CANivore later, use:
-    // new TalonFX(20, TunerConstants.kCANBus.getName());
-    private final TalonFX shooterLeft = new TalonFX(20);
-    private final TalonFX shooterRight = new TalonFX(21);
-
-    private final DutyCycleOut shooterOutput = new DutyCycleOut(0);
+    private final IntakeSubsystem intake = new IntakeSubsystem();
+    private final ArmSubsystem arm = new ArmSubsystem();
+    private final FeederSubsystem feeder = new FeederSubsystem();
+    private final ShooterSubsystem shooter = new ShooterSubsystem();
 
     public RobotContainer() {
         // PathPlanner Named Commands (must be registered BEFORE buildAutoChooser)
@@ -84,37 +69,25 @@ public class RobotContainer {
             "ShootTime",
             new StartEndCommand(
                 () -> {
-                    shooterLeft.setControl(shooterOutput.withOutput(1.0));
-                    shooterRight.setControl(shooterOutput.withOutput(1.0));
-                    feederMotor.set(1.0);
+                    shooter.setPercent(1.0);
+                    feeder.set(1.0);
                 },
                 () -> {
-                    shooterLeft.setControl(shooterOutput.withOutput(0.0));
-                    shooterRight.setControl(shooterOutput.withOutput(0.0));
-                    feederMotor.stopMotor();
-                }
+                    shooter.stop();
+                    feeder.stop();
+                },
+                shooter,
+                feeder
             ).withTimeout(7.0)
         );
 
         autoChooser = AutoBuilder.buildAutoChooser("Tests");
         SmartDashboard.putData("Auto Mode", autoChooser);
 
-        // Mechanism motor inversion defaults (adjust after quick test)
-        intakeMotor.setInverted(false);
-
-        leftArmMotor.setInverted(false);
-        rightArmMotor.setInverted(true); // mirror arm
-
-        feederMotor.setInverted(false);
-
-        TalonFXConfiguration shooterCfg = new TalonFXConfiguration();
-shooterCfg.MotorOutput.Inverted = InvertedValue.CounterClockwise_Positive;
-shooterRight.getConfigurator().apply(shooterCfg);
-
         configureBindings();
 
         // Warmup PathPlanner to avoid Java pauses
-        FollowPathCommand.warmupCommand().schedule();
+        CommandScheduler.getInstance().schedule(FollowPathCommand.warmupCommand());
     }
 
     private void configureBindings() {
@@ -185,75 +158,52 @@ shooterRight.getConfigurator().apply(shooterCfg);
         // -------------------------
         // Intake IN/OUT on triggers
         joystick.rightTrigger(0.15).whileTrue(
-            new InstantCommand(() -> intakeMotor.set(0.9))
-        ).onFalse(
-            new InstantCommand(intakeMotor::stopMotor)
+            new StartEndCommand(intake::intakeIn, intake::stop, intake)
         );
 
         joystick.leftTrigger(0.15).whileTrue(
-            new InstantCommand(() -> intakeMotor.set(-0.6))
-        ).onFalse(
-            new InstantCommand(intakeMotor::stopMotor)
+            new StartEndCommand(intake::intakeOut, intake::stop, intake)
         );
 
         // Arms on POV left/right (avoids LB which is already seedFieldCentric)
         joystick.povRight().whileTrue(
-            new InstantCommand(() -> {
-                leftArmMotor.set(0.6);
-                rightArmMotor.set(0.6);
-            })
-        ).onFalse(
-            new InstantCommand(() -> {
-                leftArmMotor.stopMotor();
-                rightArmMotor.stopMotor();
-            })
+            new StartEndCommand(() -> arm.set(0.6), arm::stop, arm)
         );
 
         joystick.povLeft().whileTrue(
-            new InstantCommand(() -> {
-                leftArmMotor.set(-0.6);
-                rightArmMotor.set(-0.6);
-            })
-        ).onFalse(
-            new InstantCommand(() -> {
-                leftArmMotor.stopMotor();
-                rightArmMotor.stopMotor();
-            })
+            new StartEndCommand(() -> arm.set(-0.6), arm::stop, arm)
         );
 
         // Feeder on RB (LB is taken)
         joystick.rightBumper().whileTrue(
-            new InstantCommand(() -> feederMotor.set(0.8))
-        ).onFalse(
-            new InstantCommand(feederMotor::stopMotor)
+            new StartEndCommand(() -> feeder.set(0.8), feeder::stop, feeder)
         );
 
         // Shooter spin on X (NOTE: X is used with back/start for SysId, but not alone)
-        joystick.x().whileTrue(
-            new InstantCommand(() -> {
-                shooterLeft.setControl(shooterOutput.withOutput(0.85));
-                shooterRight.setControl(shooterOutput.withOutput(0.85));
-            })
-        ).onFalse(
-            new InstantCommand(() -> {
-                shooterLeft.setControl(shooterOutput.withOutput(0.0));
-                shooterRight.setControl(shooterOutput.withOutput(0.0));
-            })
+        joystick.x()
+            .and(joystick.back().negate())
+            .and(joystick.start().negate())
+            .whileTrue(
+            new StartEndCommand(() -> shooter.setPercent(0.85), shooter::stop, shooter)
         );
 
         // Shoot (shooter + feeder) on Y (same note as X)
-        joystick.y().whileTrue(
-            new InstantCommand(() -> {
-                shooterLeft.setControl(shooterOutput.withOutput(1.0));
-                shooterRight.setControl(shooterOutput.withOutput(1.0));
-                feederMotor.set(1.0);
-            })
-        ).onFalse(
-            new InstantCommand(() -> {
-                shooterLeft.setControl(shooterOutput.withOutput(0.0));
-                shooterRight.setControl(shooterOutput.withOutput(0.0));
-                feederMotor.stopMotor();
-            })
+        joystick.y()
+            .and(joystick.back().negate())
+            .and(joystick.start().negate())
+            .whileTrue(
+            new StartEndCommand(
+                () -> {
+                    shooter.setPercent(1.0);
+                    feeder.set(1.0);
+                },
+                () -> {
+                    shooter.stop();
+                    feeder.stop();
+                },
+                shooter,
+                feeder
+            )
         );
     }
 
